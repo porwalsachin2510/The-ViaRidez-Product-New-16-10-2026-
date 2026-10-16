@@ -338,11 +338,11 @@ ${detailTable(
     { label: "Route", value: opts.route },
     { label: "Passengers", value: opts.passengers },
     { label: "Preferred start", value: opts.startDate },
-    { label: "Indicative estimate", value: opts.estimate },
+    { label: "Approximate pricing", value: opts.estimate },
   ],
   "Your requirements",
 )}
-${opts.estimate ? finePrint("The figure above is an indicative range generated from your inputs. Your formal proposal will be priced on final routing, vehicle mix and contract term.") : ""}
+${opts.estimate ? finePrint("Pricing is approximate and generated from your inputs. Your formal proposal will be priced on final routing, vehicle mix and contract term.") : ""}
 ${steps([
   "We validate routing, vehicle mix and scheduling.",
   "You receive a written proposal with transparent pricing.",

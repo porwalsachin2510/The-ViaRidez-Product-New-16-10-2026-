@@ -1,140 +1,159 @@
 /**
- * Indicative commute-cost estimator.
+ * ViaRidez approximate pricing engine.
  *
- * This is a *marketing* estimator — it produces an indicative monthly cost
- * range plus an estimated saving versus employees expensing ride-hailing.
- * It is deliberately transparent and conservative; the real proposal is
- * always prepared by a mobility specialist. All figures are in AED.
+ * Business rules (AED, per vehicle, per month):
+ *   - 12 seater  → 8,500
+ *   - 22 seater  → 12,500
+ *   - 34 seater  → 14,500
+ *   - 55–70 seater → 16,500
+ * Each package covers 1 round trip per day, within 50 km daily mileage,
+ * for 22 operating days a month (a 5-day week). A 6-day week is 26 days.
  *
- * Pure module (no DB / no client-only APIs) so it can run on the server
- * (server action, JSON-LD) and the client (live wizard preview) alike.
+ * Figures are approximate "starts at" prices — the real proposal is always
+ * prepared by a mobility specialist. Pure module so the same maths runs in the
+ * client preview and in the server action (the server never trusts the client).
  */
 
 export type TripType = "one-way" | "round-trip"
 
+export const DAYS_PER_WEEK_OPTIONS = [
+  { days: 5, label: "5 days / week (weekdays)" },
+  { days: 6, label: "6 days / week" },
+] as const
+
+export type DaysPerWeek = (typeof DAYS_PER_WEEK_OPTIONS)[number]["days"]
+
+export const PRICING_BASE = {
+  /** Operating days included in every monthly package. */
+  daysPerMonth: 22,
+  /** Daily mileage (km) included in every monthly package. */
+  includedDailyKm: 50,
+  /** One-way service (single leg) as a share of the round-trip package. */
+  oneWayFactor: 0.6,
+} as const
+
+/** Vehicle tiers ordered by capacity. */
+export const VEHICLE_TIERS = [
+  { label: "12-seater van", seats: 12, monthlyRate: 8500 },
+  { label: "22-seater mini bus", seats: 22, monthlyRate: 12500 },
+  { label: "34-seater midi bus", seats: 34, monthlyRate: 14500 },
+  { label: "55–70 seater coach", seats: 70, monthlyRate: 16500 },
+] as const
+
+export const MIN_STARTING_PRICE = VEHICLE_TIERS[0].monthlyRate
+
 export interface EstimatorInput {
-  /** Number of employees to be transported. */
-  employees: number
-  /** Approximate one-way distance per trip, in km. */
+  passengers: number
+  /** One-way distance between pickup and drop-off, in km. */
   distanceKm: number
-  /** Working days per week (1–7). */
   daysPerWeek: number
-  /** One-way (home→office only) or round-trip (both legs). */
   tripType: TripType
 }
 
-export interface VehiclePlan {
+export interface FleetLine {
   label: string
   seats: number
-  /** How many of this vehicle are needed. */
   count: number
-  /** Indicative all-in cost per vehicle per operating day (driver + fuel + ops). */
-  dayRate: number
+  monthlyRate: number
 }
 
 export interface EstimatorResult {
-  /** Recommended vehicle mix. */
-  plan: VehiclePlan
-  /** Legs per day (1 for one-way, 2 for round-trip). */
+  fleet: FleetLine[]
+  /** Human summary, e.g. "1× 55–70 seater coach + 1× 12-seater van". */
+  fleetSummary: string
+  totalSeats: number
   legsPerDay: number
-  /** Operating days per month (daysPerWeek * 4.33, rounded). */
+  daysPerWeek: number
   daysPerMonth: number
-  /** Indicative ViaRidez monthly cost — low end of the range. */
-  monthlyLow: number
-  /** Indicative ViaRidez monthly cost — high end of the range. */
-  monthlyHigh: number
-  /** Estimated monthly cost if employees expensed ride-hailing instead. */
+  dailyMileageKm: number
+  /** Approximate monthly price this programme starts at (AED). */
+  startingPrice: number
   rideHailingMonthly: number
-  /** Estimated monthly saving (ride-hailing − ViaRidez midpoint). */
   monthlySavings: number
-  /** Saving as a percentage of the ride-hailing baseline. */
   savingsPct: number
-  /** Cost per employee per month (midpoint). */
-  perEmployeeMonthly: number
+  perPassengerMonthly: number
 }
 
-const DAYS_PER_MONTH_FACTOR = 4.33
-
-/** Vehicle options ordered by capacity. Rates are indicative AED/day, all-in. */
-const VEHICLES = [
-  { label: "Executive Sedan", seats: 4, baseDayRate: 320, perKm: 1.6 },
-  { label: "Premium Van (Hiace)", seats: 12, baseDayRate: 520, perKm: 2.1 },
-  { label: "Midi Bus", seats: 22, baseDayRate: 760, perKm: 2.8 },
-  { label: "Coach Bus", seats: 50, baseDayRate: 1150, perKm: 3.6 },
-] as const
-
-/** Indicative ride-hailing cost per km per passenger (AED), UAE market. */
 const RIDE_HAILING_PER_KM = 2.4
 const RIDE_HAILING_BASE_FARE = 12
 
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
+function daysPerMonthFor(daysPerWeek: number) {
+  return daysPerWeek >= 6 ? 26 : PRICING_BASE.daysPerMonth
 }
 
-function roundTo(n: number, step: number) {
-  return Math.round(n / step) * step
+function roundUpTo(n: number, step: number) {
+  return Math.ceil(n / step) * step
 }
 
-/** Pick the most cost-efficient single vehicle type for the headcount. */
-function pickVehicle(employees: number) {
-  // Prefer the smallest vehicle class that fills reasonably; fall back to coach.
-  for (const v of VEHICLES) {
-    const count = Math.ceil(employees / v.seats)
-    // Use this class if it needs a sensible number of vehicles.
-    if (count <= 6 || v === VEHICLES[VEHICLES.length - 1]) {
-      return { ...v, count }
-    }
+/** Smallest tier that seats the group, or the coach when nothing smaller fits. */
+function tierFor(passengers: number) {
+  return VEHICLE_TIERS.find((t) => t.seats >= passengers) ?? VEHICLE_TIERS[VEHICLE_TIERS.length - 1]
+}
+
+/** Fill full coaches first, then cover any remainder with the smallest fitting tier. */
+export function planFleet(passengers: number): FleetLine[] {
+  const largest = VEHICLE_TIERS[VEHICLE_TIERS.length - 1]
+  const lines = new Map<string, FleetLine>()
+  const add = (tier: (typeof VEHICLE_TIERS)[number], count: number) => {
+    if (count <= 0) return
+    const existing = lines.get(tier.label)
+    if (existing) existing.count += count
+    else lines.set(tier.label, { label: tier.label, seats: tier.seats, monthlyRate: tier.monthlyRate, count })
   }
-  const last = VEHICLES[VEHICLES.length - 1]
-  return { ...last, count: Math.ceil(employees / last.seats) }
+
+  const fullCoaches = Math.floor(passengers / largest.seats)
+  const remainder = passengers - fullCoaches * largest.seats
+  add(largest, fullCoaches)
+  if (remainder > 0) add(tierFor(remainder), 1)
+
+  return [...lines.values()].sort((a, b) => b.seats - a.seats)
 }
 
 export function estimate(input: EstimatorInput): EstimatorResult {
-  const employees = clamp(Math.round(input.employees) || 0, 1, 5000)
-  const distanceKm = clamp(input.distanceKm || 0, 1, 300)
-  const daysPerWeek = clamp(Math.round(input.daysPerWeek) || 0, 1, 7)
-  const legsPerDay = input.tripType === "round-trip" ? 2 : 1
+  const passengers = Math.max(1, Math.round(input.passengers) || 1)
+  const distanceKm = Math.max(1, input.distanceKm || 1)
+  const daysPerWeek = input.daysPerWeek >= 6 ? 6 : 5
+  const legsPerDay = input.tripType === "one-way" ? 1 : 2
 
-  const v = pickVehicle(employees)
-  const daysPerMonth = Math.round(daysPerWeek * DAYS_PER_MONTH_FACTOR)
+  const fleet = planFleet(passengers)
+  const daysPerMonth = daysPerMonthFor(daysPerWeek)
+  const dailyMileageKm = Math.round(distanceKm * legsPerDay)
 
-  // Per-vehicle day rate scales with distance beyond a 15km baseline.
-  const distanceFactor = 1 + Math.max(0, distanceKm - 15) * 0.012
-  const dayRate = Math.round(v.baseDayRate * distanceFactor + distanceKm * v.perKm)
+  const fleetBase = fleet.reduce((sum, l) => sum + l.count * l.monthlyRate, 0)
+  const dayFactor = daysPerMonth / PRICING_BASE.daysPerMonth
+  const mileageFactor = Math.max(1, dailyMileageKm / PRICING_BASE.includedDailyKm)
+  const tripFactor = legsPerDay === 1 ? PRICING_BASE.oneWayFactor : 1
 
-  // Monthly ViaRidez cost midpoint, then a ±12% indicative band.
-  const midMonthly = v.count * dayRate * legsPerDay * daysPerMonth
-  const monthlyLow = roundTo(midMonthly * 0.88, 50)
-  const monthlyHigh = roundTo(midMonthly * 1.12, 50)
+  const raw = fleetBase * dayFactor * mileageFactor * tripFactor
+  // Keep the published package prices exact; round adjusted prices up to 100.
+  const startingPrice = raw === fleetBase ? fleetBase : roundUpTo(raw, 100)
 
-  // Ride-hailing baseline: each employee takes an individual trip per leg.
   const perTrip = RIDE_HAILING_BASE_FARE + distanceKm * RIDE_HAILING_PER_KM
-  const rideHailingMonthly = roundTo(
-    employees * perTrip * legsPerDay * daysPerMonth,
-    50,
-  )
-
-  const monthlySavings = Math.max(0, roundTo(rideHailingMonthly - midMonthly, 50))
-  const savingsPct =
-    rideHailingMonthly > 0
-      ? Math.round((monthlySavings / rideHailingMonthly) * 100)
-      : 0
-  const perEmployeeMonthly = Math.round(midMonthly / employees)
+  const rideHailingMonthly = roundUpTo(passengers * perTrip * legsPerDay * daysPerMonth, 50)
+  const monthlySavings = Math.max(0, rideHailingMonthly - startingPrice)
+  const savingsPct = rideHailingMonthly > 0 ? Math.round((monthlySavings / rideHailingMonthly) * 100) : 0
 
   return {
-    plan: { label: v.label, seats: v.seats, count: v.count, dayRate },
+    fleet,
+    fleetSummary: fleet.map((l) => `${l.count}× ${l.label}`).join(" + "),
+    totalSeats: fleet.reduce((sum, l) => sum + l.count * l.seats, 0),
     legsPerDay,
+    daysPerWeek,
     daysPerMonth,
-    monthlyLow,
-    monthlyHigh,
+    dailyMileageKm,
+    startingPrice,
     rideHailingMonthly,
     monthlySavings,
     savingsPct,
-    perEmployeeMonthly,
+    perPassengerMonthly: Math.round(startingPrice / passengers),
   }
 }
 
 /** Format an AED amount for display, e.g. 12500 → "AED 12,500". */
 export function formatAED(n: number): string {
   return `AED ${Math.round(n).toLocaleString("en-AE")}`
+}
+
+export function startingPriceLabel(n: number): string {
+  return `Approximate pricing starts at ${formatAED(n)} / month`
 }

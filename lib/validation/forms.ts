@@ -21,26 +21,44 @@ export const contactSchema = z.object({
   website: z.string().max(0).optional(),
 })
 
-export const quoteSchema = z.object({
+const requiredNumber = (missing: string) =>
+  z
+    .string()
+    .trim()
+    .min(1, missing)
+    .refine((v) => /^\d+(\.\d+)?$/.test(v), "Enter a valid number")
+    .transform(Number)
+
+/**
+ * Step 1 of the quote wizard ("Your route"). Shared by the client (to gate the
+ * estimate step) and the server action (which recomputes the price itself).
+ */
+export const quoteRouteSchema = z.object({
+  service: z.string().trim().min(1, "Select the service you need").max(160),
+  pickupLocation: z.string().trim().min(2, "Enter a pickup location").max(200),
+  dropoffLocation: z.string().trim().min(2, "Enter a drop-off location").max(200),
+  passengers: requiredNumber("Enter the number of passengers")
+    .refine((n) => Number.isInteger(n), "Enter a whole number")
+    .refine((n) => n >= 1, "At least 1 passenger")
+    .refine((n) => n <= 1000, "For more than 1,000 passengers please contact us directly"),
+  distanceKm: requiredNumber("Enter the one-way distance")
+    .refine((n) => n >= 1, "Distance must be at least 1 km")
+    .refine((n) => n <= 300, "Distance must be 300 km or less"),
+  daysPerWeek: z.enum(["5", "6"], { error: "Choose 5 or 6 days per week" }).transform(Number),
+  tripType: z.enum(["round-trip", "one-way"], { error: "Choose a trip type" }),
+})
+
+export const quoteSchema = quoteRouteSchema.extend({
   name,
   email,
   phone,
   company: z.string().trim().min(2, "Enter your company name").max(160),
-  service: z.string().trim().max(160).optional().or(z.literal("")),
-  pickupLocation: z.string().trim().max(200).optional().or(z.literal("")),
-  dropoffLocation: z.string().trim().max(200).optional().or(z.literal("")),
-  passengers: z.string().trim().max(40).optional().or(z.literal("")),
-  frequency: z.string().trim().max(80).optional().or(z.literal("")),
-  tripType: z.string().trim().max(40).optional().or(z.literal("")),
-  distanceKm: z.string().trim().max(12).optional().or(z.literal("")),
   startDate: z.string().trim().max(60).optional().or(z.literal("")),
-  // Indicative estimate carried from the wizard (numbers as strings in FormData).
-  estimateLow: z.string().trim().max(20).optional().or(z.literal("")),
-  estimateHigh: z.string().trim().max(20).optional().or(z.literal("")),
-  estimatedSavings: z.string().trim().max(20).optional().or(z.literal("")),
   message: z.string().trim().max(4000).optional().or(z.literal("")),
   website: z.string().max(0).optional(),
 })
+
+export const QUOTE_ROUTE_FIELDS = Object.keys(quoteRouteSchema.shape) as (keyof typeof quoteRouteSchema.shape)[]
 
 export const demoSchema = z.object({
   name,

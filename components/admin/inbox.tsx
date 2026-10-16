@@ -100,6 +100,11 @@ type BaseRecord = {
   dropoffLocation?: string
   startDate?: string
   employeeCount?: string
+  frequency?: string
+  tripType?: string
+  distanceKm?: string
+  vehiclePlan?: string
+  startingPrice?: number
   position?: string
   coverLetter?: string
   resumeUrl?: string
@@ -185,7 +190,24 @@ export function InboxList({ kind, records }: { kind: InboxKind; records: BaseRec
                         {r.phone ? <DetailItem icon={<Phone className="h-4 w-4" />} label="Phone" value={r.phone} /> : null}
                         {r.company ? <DetailItem icon={<Building2 className="h-4 w-4" />} label="Company" value={r.company} /> : null}
                         {r.pickupLocation ? <DetailItem icon={<MapPin className="h-4 w-4" />} label="Pickup" value={r.pickupLocation} /> : null}
+                        {r.dropoffLocation ? <DetailItem icon={<MapPin className="h-4 w-4" />} label="Drop-off" value={r.dropoffLocation} /> : null}
                         {r.employeeCount ? <DetailItem icon={<Users className="h-4 w-4" />} label="Passengers" value={String(r.employeeCount)} /> : null}
+                        {r.distanceKm ? <DetailItem icon={<MapPin className="h-4 w-4" />} label="One-way distance" value={`${r.distanceKm} km`} /> : null}
+                        {r.frequency || r.tripType ? (
+                          <DetailItem
+                            icon={<FileText className="h-4 w-4" />}
+                            label="Schedule"
+                            value={[r.frequency, r.tripType === "round-trip" ? "Round trip" : r.tripType === "one-way" ? "One way" : r.tripType].filter(Boolean).join(" · ")}
+                          />
+                        ) : null}
+                        {r.vehiclePlan ? <DetailItem icon={<Users className="h-4 w-4" />} label="Suggested fleet" value={r.vehiclePlan} /> : null}
+                        {r.startingPrice ? (
+                          <DetailItem
+                            icon={<FileText className="h-4 w-4" />}
+                            label="Approximate pricing starts at"
+                            value={`AED ${r.startingPrice.toLocaleString("en-AE")} / month`}
+                          />
+                        ) : null}
                         {r.position ? <DetailItem icon={<FileText className="h-4 w-4" />} label="Position" value={r.position} /> : null}
                         {r.city ? <DetailItem icon={<MapPin className="h-4 w-4" />} label="City" value={r.city} /> : null}
                         {r.fleetSize ? <DetailItem icon={<Users className="h-4 w-4" />} label="Fleet size" value={r.fleetSize} /> : null}

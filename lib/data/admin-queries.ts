@@ -348,6 +348,11 @@ export async function getQuotes() {
     // in `details` — read from the actual fields so the inbox shows real data.
     employeeCount: (d.employeeCount as string) ?? "",
     startDate: (d.startDate as string) ?? "",
+    frequency: (d.frequency as string) ?? "",
+    tripType: (d.tripType as string) ?? "",
+    distanceKm: typeof d.distanceKm === "number" && d.distanceKm > 0 ? String(d.distanceKm) : "",
+    vehiclePlan: (d.vehiclePlan as string) ?? "",
+    startingPrice: typeof d.estimateLow === "number" && d.estimateLow > 0 ? d.estimateLow : 0,
     message: (d.details as string) ?? "",
     notes: (d.notes as string) ?? "",
     status: (d.status as string) ?? "new",

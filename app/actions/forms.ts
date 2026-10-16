@@ -33,6 +33,7 @@ import {
   unsubscribeUrl,
 } from "@/lib/email/notify"
 import { syncLeadToCrm } from "@/lib/crm"
+import { estimate, startingPriceLabel, DAYS_PER_WEEK_OPTIONS } from "@/lib/pricing"
 import { enforceRateLimit } from "@/lib/security/rate-limit"
 import { requestMetadata } from "@/lib/security/request"
 import {
@@ -99,11 +100,6 @@ function leadAttribution(raw: Record<string, unknown>) {
     utmContent: get('utmContent'),
     utmTerm: get('utmTerm'),
   }
-}
-
-const toNum = (v?: string) => {
-  const n = Number(v)
-  return Number.isFinite(n) ? n : 0
 }
 
 async function protectSubmission(scope: string, email: string, raw: Record<string, string>) {
@@ -210,6 +206,19 @@ export async function submitQuote(_prev: FormState, formData: FormData): Promise
   if (!protection.ok) return protection
 
   const d = parsed.data
+  // Price is always recomputed server-side from validated inputs.
+  const quote = estimate({
+    passengers: d.passengers,
+    distanceKm: d.distanceKm,
+    daysPerWeek: d.daysPerWeek,
+    tripType: d.tripType,
+  })
+  const frequency =
+    DAYS_PER_WEEK_OPTIONS.find((o) => o.days === d.daysPerWeek)?.label ?? `${d.daysPerWeek} days / week`
+  const tripTypeLabel = d.tripType === "round-trip" ? "Round trip" : "One way"
+  const estimateText = startingPriceLabel(quote.startingPrice)
+  const route = `${d.pickupLocation} → ${d.dropoffLocation}`
+
   try {
     await connectToDatabase()
     const synced = await syncLeadToCrm({
@@ -223,14 +232,14 @@ export async function submitQuote(_prev: FormState, formData: FormData): Promise
         service: d.service,
         pickupLocation: d.pickupLocation,
         dropoffLocation: d.dropoffLocation,
-        passengers: d.passengers,
-        frequency: d.frequency,
+        passengers: String(d.passengers),
+        frequency,
         tripType: d.tripType,
-        distanceKm: d.distanceKm,
+        distanceKm: String(d.distanceKm),
         startDate: d.startDate,
-        estimateLow: d.estimateLow,
-        estimateHigh: d.estimateHigh,
-        estimatedSavings: d.estimatedSavings,
+        vehiclePlan: quote.fleetSummary,
+        startingPrice: String(quote.startingPrice),
+        estimatedSavings: String(quote.monthlySavings),
       },
     })
     await QuoteRequest.create({
@@ -239,17 +248,21 @@ export async function submitQuote(_prev: FormState, formData: FormData): Promise
       email: d.email,
       phone: d.phone,
       company: d.company,
-      serviceType: d.service || "",
-      employeeCount: d.passengers || "",
-      pickupLocation: d.pickupLocation || "",
-      dropoffLocation: d.dropoffLocation || "",
+      serviceType: d.service,
+      employeeCount: String(d.passengers),
+      pickupLocation: d.pickupLocation,
+      dropoffLocation: d.dropoffLocation,
       startDate: d.startDate || "",
-      frequency: d.frequency || "",
-      tripType: d.tripType || "",
-      distanceKm: toNum(d.distanceKm),
-      estimateLow: toNum(d.estimateLow),
-      estimateHigh: toNum(d.estimateHigh),
-      estimatedSavings: toNum(d.estimatedSavings),
+      frequency,
+      daysPerWeek: quote.daysPerWeek,
+      daysPerMonth: quote.daysPerMonth,
+      tripType: d.tripType,
+      distanceKm: d.distanceKm,
+      dailyMileageKm: quote.dailyMileageKm,
+      vehiclePlan: quote.fleetSummary,
+      estimateLow: quote.startingPrice,
+      estimateHigh: quote.startingPrice,
+      estimatedSavings: quote.monthlySavings,
       details: d.message || "",
       syncedToCrm: synced,
     })
@@ -263,29 +276,19 @@ export async function submitQuote(_prev: FormState, formData: FormData): Promise
         { label: "Email", value: d.email },
         { label: "Phone", value: d.phone },
         { label: "Service", value: d.service },
-        { label: "Route", value: [d.pickupLocation, d.dropoffLocation].filter(Boolean).join(" → ") },
-        { label: "Passengers", value: d.passengers },
-        { label: "Frequency", value: d.frequency },
-        { label: "Trip type", value: d.tripType },
-        { label: "Distance (km)", value: d.distanceKm },
+        { label: "Route", value: route },
+        { label: "Passengers", value: String(d.passengers) },
+        { label: "Frequency", value: frequency },
+        { label: "Trip type", value: tripTypeLabel },
+        { label: "One-way distance (km)", value: String(d.distanceKm) },
+        { label: "Suggested fleet", value: quote.fleetSummary },
         { label: "Start date", value: d.startDate },
-        {
-          label: "Indicative estimate",
-          value:
-            d.estimateLow && d.estimateHigh
-              ? `AED ${Number(d.estimateLow).toLocaleString()} – ${Number(d.estimateHigh).toLocaleString()} / month`
-              : "",
-        },
+        { label: "Approximate pricing", value: estimateText },
         { label: "Details", value: d.message, long: true },
       ],
       d.email,
       "/admin/quotes",
     )
-
-    const estimate =
-      d.estimateLow && d.estimateHigh
-        ? `AED ${Number(d.estimateLow).toLocaleString()} – ${Number(d.estimateHigh).toLocaleString()} / month`
-        : ""
 
     await sendCustomerEmail({
       to: d.email,
@@ -294,10 +297,10 @@ export async function submitQuote(_prev: FormState, formData: FormData): Promise
         name: d.name,
         company: d.company,
         service: d.service,
-        route: [d.pickupLocation, d.dropoffLocation].filter(Boolean).join(" → "),
-        passengers: d.passengers,
+        route,
+        passengers: String(d.passengers),
         startDate: d.startDate,
-        estimate,
+        estimate: estimateText,
         footer: await emailFooter(),
       }),
     })

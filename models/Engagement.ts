@@ -135,9 +135,13 @@ const quoteRequestSchema = new Schema(
     details: { type: String, default: '' },
     // Structured inputs from the quote wizard / cost estimator.
     frequency: { type: String, default: '' },
+    daysPerWeek: { type: Number, default: 0 },
+    daysPerMonth: { type: Number, default: 0 },
     tripType: { type: String, default: '' },
     distanceKm: { type: Number, default: 0 },
-    // Indicative estimate captured at submission time (marketing figure).
+    dailyMileageKm: { type: Number, default: 0 },
+    vehiclePlan: { type: String, default: '' },
+    // Approximate "starts at" price captured at submission time (low = high).
     estimateLow: { type: Number, default: 0 },
     estimateHigh: { type: Number, default: 0 },
     estimatedSavings: { type: Number, default: 0 },
